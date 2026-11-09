@@ -1,0 +1,16 @@
+[package]
+name = "yolow64-compare"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+yolow64 = { path = "../.." }
+base64 = "=0.23.1"
+base64-simd = "=0.8.0"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+
+[workspace]
