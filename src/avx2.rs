@@ -2488,6 +2488,7 @@ pub(crate) unsafe fn decode_any(
 
 /// First non-alphabet byte, used only when the speculative assembly loop
 /// detects an error. '=' is not in the bulk alphabet.
+#[cfg(target_os = "linux")]
 fn first_invalid(input: &[u8], alphabet: Alphabet) -> usize {
     input
         .iter()

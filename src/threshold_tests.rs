@@ -1382,7 +1382,7 @@ fn encode_load16u8_lab() {
 
 #[test]
 #[ignore = "timing, run separately under the benchmark lock"]
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", target_os = "linux"))]
 fn encode_asm_lab() {
     use std::mem::MaybeUninit;
     let sizes = [4096usize, 8192, 16384, 65536, 262144, 1048576];
