@@ -1,0 +1,51 @@
+# Changelog
+
+## 0.2.0 — 2026-11-11
+
+Performance and compatibility release.
+
+### Decode
+
+- Replaced the bulk decode kernel with a four-block AVX2 hash loop using
+  clean-room translation/validation tables, speculative validation, and
+  per-quad/pack constants held in registers.
+- Added a BMI2 `pext` tail for padded 24- and 172-character inputs, and a
+  single-call 24-character `avx2+bmi2` kernel. Exact-length no-padding
+  16/32/64/128-character inputs bypass the general dispatch.
+- Short-decode cells are first at 12, 16, 24, 48, 96 and 128 bytes in the
+  recorded eight-library run; the bulk path is first from 64 KiB through 4 MiB
+  under equal full validation.
+- Full validation is retained for every block. Padding-bit checks reject
+  non-zero trailing bits.
+
+### Encode
+
+- Added adaptive non-temporal stores above `3/7` of the detected LLC, a
+  streaming encode API, and a memory-bounded `encode_to_writer`.
+- Short 8/16/32-byte fast paths use a single conversion and overwrite the
+  padding characters instead of running the generic tail.
+- The optional `parallel` feature uses cache-aware workers; large inputs stay
+  on the single-thread streaming path when that is faster.
+
+### Compatibility and safety
+
+- AVX2 and BMI2 are detected independently. BMI2 `pext` paths run only when
+  both features are present; AVX2-only and scalar CPUs fall back without
+  executing BMI2 instructions.
+- Added exact-output canary tests for caller-provided decode buffers and
+  streaming encode buffers, plus explicit non-zero-trailing-bit tests and a
+  test-only no-BMI2 fallback switch.
+- MSRV is Rust 1.89; CI covers Linux x86-64, aarch64 cross-check and Windows
+  cross-check.
+
+### Benchmarks and records
+
+- The internal R&D record, including rejected kernels, moved to
+  [`research/`](research/README.md).
+- Benchmark numbers are snapshots from a shared Intel i7-10700; see
+  [`benchmarks/README.md`](benchmarks/README.md) and
+  [`research/decode.md`](research/decode.md).
+- Turbo-Base64 comparisons in the release tables use `FULLCHECK=1` for equal
+  validation. Its default build checks only the first of four blocks in the
+  256-byte hot loop; the verification is in
+  [`research/turbo-check.md`](research/turbo-check.md).

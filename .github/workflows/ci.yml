@@ -21,4 +21,5 @@ jobs:
         with:
           toolchain: ${{ matrix.rust }}
       - run: cargo test --release --locked
+      - run: cargo test --release --locked --all-features
       - run: cargo run --release --locked --example basic

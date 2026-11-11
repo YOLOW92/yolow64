@@ -12,9 +12,24 @@ While building [PageSift](https://github.com/YOLOW92/pagesift), we needed Base64
 
 - Standard and URL-safe alphabets; padded and unpadded forms.
 - Slice, append, owned-output, validation, streaming decode and data URL APIs.
-- AVX2 on supported x86-64 CPUs and NEON on supported AArch64 CPUs, selected at runtime; scalar fallback.
+- Optional `parallel` feature with cache-aware automatic worker selection.
+- AVX2 bulk and BMI2 short-decode paths on supported x86-64 CPUs, detected independently; NEON on supported AArch64 CPUs; scalar fallback.
 - Rust 1.89 or newer; `std` required. **No runtime third-party dependencies.**
 - Independently measured results and runnable benchmark below. Short inputs do not always win.
+
+## How it works
+
+![Decode pipeline](docs/figures/decode-pipeline.svg)
+
+*Bulk AVX2 block path and the short exact-length / BMI2 `pext` paths.*
+
+![CPU dispatch and fallback](docs/figures/cpu-dispatch.svg)
+
+*AVX2 and BMI2 are detected independently; the `pext` short paths run only when both are present.*
+
+## Release notes
+
+See [`CHANGELOG.md`](CHANGELOG.md) for the 0.2.0 performance, compatibility and safety changes, and [`research/`](research/README.md) for the complete experiment record including rejected kernels.
 
 ## Install
 
@@ -60,51 +75,82 @@ For preallocated buffers, `Codec::encoded_len` calculates the encode capacity, `
 
 ## Performance
 
-Microseconds per call, **lower is better**. Intel Core i7-10700, Linux x86-64, CPU 0, Rust 1.99.0, release with fat LTO. Three complete same-process runs; each cell is the median of the three runs' seven-round medians. Inputs and reused output buffers are 64-byte aligned. The input is repeatedly reused, so results do not describe cold-cache workloads or all buffer alignments. Short-input differences are in nanoseconds and sensitive to noise.
+An eight-implementation comparison was run on 2026-11-11 on the same machine, with the same inputs, buffers and process. Full tables, raw per-round data and the exact configurations are in [`benchmarks/README.md`](benchmarks/README.md). The experiment log, including rejected kernels, is in [`research/experiments.md`](research/experiments.md). A broader 22-implementation encode-only comparison is in [`research/encode-counters.md`](research/encode-counters.md) and [`research/encode-comparison.md`](research/encode-comparison.md); the decode status and cold-buffer data are in [`research/decode.md`](research/decode.md). In the pre-update 22-way comparison `yolow64` ranked 3rd for short inputs, 2nd for 192 B–4 KiB, and 3rd for 8 KiB–16 MiB; it was first at 1 MiB. After the 8/16/32-byte fast paths it is fastest at 8, 12, 16, 24, 32, 48 and 96 B in the eight-library harness. The counter report adds per-call instruction counts, D1/LLd miss rates and the crossover points.
 
-The comparison uses `base64` 0.23.1 and `base64-simd` 0.8.0. For CRLF decoding, `base64` timing includes filtering whitespace into a reused buffer; `base64-simd` uses `forgiving_decode`. Their full acceptance and error semantics differ from yolow64. All libraries decode the valid padded test inputs correctly. Encoding is unaffected by whitespace mode; differences between its two tables are measurement noise. [Method, commands and raw results](benchmarks/README.md).
+Environment: Intel Core i7-10700 (Comet Lake), AVX2/BMI2, no AVX-512, Linux x86-64, Rust 1.99.0, release fat LTO. The machine is shared and `schedutil` is active; the 8–128 B and 64 KiB rows are stable, while 1–4 MiB differences are noisy. Three independent processes were run for the external columns, each with seven rotated rounds; cells are medians of the three process medians. The `yolow64` decode cells are medians of six independent processes.
 
-### Strict
+### Short inputs, ns/call (lower is better)
 
-| Input bytes | yolow64 enc | base64 enc | base64-simd enc | yolow64 dec | base64 dec | base64-simd dec |
-|---:|---:|---:|---:|---:|---:|---:|
-| 8 | 0.0110 | 0.0094 | 0.0073 | 0.0127 | 0.0139 | 0.0082 |
-| 16 | 0.0162 | 0.0150 | 0.0090 | 0.0196 | 0.0195 | 0.0119 |
-| 24 | 0.0114 | 0.0183 | 0.0112 | 0.0147 | 0.0246 | 0.0149 |
-| 32 | 0.0142 | 0.0189 | 0.0137 | 0.0231 | 0.0251 | 0.0105 |
-| 48 | 0.0128 | 0.0277 | 0.0133 | 0.0160 | 0.0357 | 0.0198 |
-| 63 | 0.0136 | 0.0316 | 0.0142 | 0.0303 | 0.0415 | 0.0167 |
-| 64 | 0.0153 | 0.0329 | 0.0149 | 0.0317 | 0.0423 | 0.0187 |
-| 96 | 0.0149 | 0.0466 | 0.0172 | 0.0213 | 0.0598 | 0.0253 |
-| 128 | 0.0183 | 0.0563 | 0.0222 | 0.0302 | 0.0729 | 0.0224 |
-| 4096 | 0.1919 | 1.6115 | 0.3794 | 0.2604 | 1.9843 | 0.5265 |
-| 65536 | 3.1836 | 25.8625 | 6.1087 | 3.6381 | 31.7227 | 8.2179 |
-| 1048576 | 57.7037 | 416.5615 | 103.2870 | 58.7227 | 513.3446 | 135.5395 |
-| 4194304 | 269.9127 | 1730.8464 | 473.7456 | 266.8989 | 2148.9401 | 605.4132 |
+| Input | yolow64 enc | fastest enc | yolow64 dec | fastest dec |
+|---:|---:|---:|---:|---:|
+| 8 B | 6.02 | 6.02 (yolow64) | 14.26 | 7.90 (Turbo-Base64) |
+| 12 B | 7.35 | 7.35 (yolow64) | **7.00** | **7.00 (yolow64)** |
+| 16 B | 6.20 | 6.20 (yolow64) | **8.53** | **8.53 (yolow64)** |
+| 24 B | 9.01 | 9.01 (yolow64) | **10.14** | **10.14 (yolow64)** |
+| 32 B | 7.29 | 7.29 (yolow64) | 19.14 | 10.36 (base64-simd) |
+| 48 B | 9.95 | 9.95 (yolow64) | **12.20** | **12.20 (yolow64)** |
+| 64 B | 13.41 | 12.11 (Turbo-Base64) | 23.18 | 12.81 (Turbo-Base64) |
+| 96 B | 11.43 | 11.43 (yolow64) | **15.68** | **15.68 (yolow64)** |
+| 128 B | 17.40 | 13.74 (Turbo-Base64) | **17.18** | **17.18 (yolow64)** |
 
-### CRLF input
+The short `fastest dec` column is the recorded default partial-check run; under `FULLCHECK=1` Turbo-Base64 is slower, so the yolow64 full-validation wins are not weakened.
 
-| Input bytes | yolow64 enc | base64 enc | base64-simd enc | yolow64 dec | base64 dec | base64-simd dec |
-|---:|---:|---:|---:|---:|---:|---:|
-| 8 | 0.0110 | 0.0094 | 0.0072 | 0.0163 | 0.0213 | 0.0175 |
-| 16 | 0.0161 | 0.0143 | 0.0075 | 0.0231 | 0.0332 | 0.0230 |
-| 24 | 0.0114 | 0.0183 | 0.0113 | 0.0179 | 0.0426 | 0.0225 |
-| 32 | 0.0142 | 0.0189 | 0.0137 | 0.0272 | 0.0490 | 0.0259 |
-| 48 | 0.0128 | 0.0277 | 0.0132 | 0.0243 | 0.0791 | 0.0265 |
-| 63 | 0.0136 | 0.0316 | 0.0142 | 0.0559 | 0.0893 | 0.0356 |
-| 64 | 0.0153 | 0.0329 | 0.0149 | 0.0619 | 0.0893 | 0.0389 |
-| 96 | 0.0149 | 0.0466 | 0.0172 | 0.0385 | 0.1272 | 0.0646 |
-| 128 | 0.0184 | 0.0564 | 0.0222 | 0.0693 | 0.1714 | 0.0888 |
-| 4096 | 0.1920 | 1.6127 | 0.3832 | 0.9862 | 5.4392 | 3.9881 |
-| 65536 | 3.1859 | 25.8590 | 6.1024 | 15.4603 | 87.0181 | 63.7618 |
-| 1048576 | 57.3887 | 417.8530 | 102.6008 | 254.0882 | 1409.5056 | 1041.0268 |
-| 4194304 | 264.4627 | 1763.5911 | 470.4936 | 1107.6406 | 5968.3779 | 4424.0290 |
+![Short decode latency — all compared libraries](docs/figures/short-all.svg)
+
+*Short decode latency across the eight compared libraries, ns/call; lower is better.*
+
+Short encode is now a strength: yolow64 is fastest at 8, 12, 16, 24, 32, 48 and 96 B; Turbo-Base64 wins 64 B and 128 B. Short decode is also fastest at 12, 16, 24, 48, 96 and 128 B. The exact-length decode fast path bypasses the general dispatch for no-padding 16/32/64/128-character inputs; the 24-character case now runs a single `avx2+bmi2` function (128-bit head plus `pext` tail), and the 44- and 172-character cases use `decode32`/hash-loop heads plus `pext`. In the broader 22-way snapshot, `tape-base64` is still slightly ahead at 24 B encode (8.78 versus 9.01). The new 8/16/32-byte encode single-load paths use one 24-byte conversion and overwrite the padding characters, avoiding the generic tail. The 8 KiB–1 MiB decode path gained 5–7% from speculative validation plus the hash loop (see [`research/decode.md`](research/decode.md)).
+
+### 64 KiB throughput, GB/s (higher is better)
+
+| Operation | yolow64 | base64-scalar | base64-simd-engine | base64-simd | base64-turbo | encodify | simdutf | Turbo-Base64 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| encode | 22.5 | 2.5 | 10.0 | 10.7 | 20.9 | 21.4 | 18.7 | **23.7** |
+| decode | **20.1** | 2.1 | 12.3 | 7.9 | 18.0 | 18.5 | 14.5 | 19.4 |
+
+### Large throughput, GB/s (higher is better)
+
+| Input | yolow64 enc | Turbo-Base64 enc | yolow64 dec | Turbo-Base64 dec (full) |
+|---:|---:|---:|---:|---:|
+| 1 MiB | 22.3 | 21.0 | 20.2 | 16.7 |
+| 4 MiB | 17.7 | 16.8 | 17.1 | 13.9 |
+
+Encode is ahead at 1 MiB and 4 MiB, close at 256 KiB, and still about 5–8% behind at 4–64 KiB. The 64 KiB decode row uses Turbo-Base64 with `FULLCHECK=1`; its default partial-check build reports 26.1 GB/s. Decode gained about 5–7% at 8 KiB–1 MiB from speculative validation plus the hash loop; it is now 20.2 GB/s at 1 MiB and 17.1 GB/s at 4 MiB. It validates every block and leads the fully validating comparison from 64 KiB through 4 MiB; Turbo-Base64 is shown with `FULLCHECK=1` for a like-for-like configuration; its default build checks only the first of four blocks in the 256-byte hot loop (25%), while `FULLCHECK=1` checks every block. At 4 MiB the two are within run-to-run noise; the table should not be read as a stable ranking at that size.
+
+![Decode throughput — all compared libraries](docs/figures/decode-all.svg)
+
+*Decode throughput across the eight compared libraries, GB/s; higher is better. Turbo uses FULLCHECK=1.*
+
+![Encode throughput — recorded 22-way comparison](docs/figures/encode-all.svg)
+
+*Recorded 22-way encode comparison, GB/s; higher is better. External columns were not re-ranked.*
+
+After this eight-library run, encode gained an adaptive streaming-store path for buffers whose input plus output exceed the detected last-level cache, plus three-line prefetch coverage per 192-byte loop iteration. A targeted three-process run gives **22.4 GB/s at 1 MiB, 21.7 GB/s at 4 MiB and 13.0 GB/s at 16 MiB** (13.0–13.3 across campaigns), up from 7.36 GB/s at 16 MiB (1.77x), and above the recorded 10.96 GB/s for `tape-base64` and 10.70 GB/s for `base64-turbo`. The threshold is `3/7` of the CPU's detected LLC, so it scales with the processor; unknown cache information or an unaligned output falls back to cached stores. See [`research/encode-counters.md`](research/encode-counters.md).
+
+### CRLF-tolerant decode, GB/s (higher is better)
+
+| Input | yolow64 (native) | encodify (native) | simdutf (native) | Turbo-Base64 (filter+strict) |
+|---:|---:|---:|---:|---:|
+| 4 KiB | 7.3 | **9.9** | 7.9 | 1.2 |
+| 64 KiB | 9.2 | **10.3** | 8.1 | 1.1 |
+| 1 MiB | 8.5 | **9.7** | 7.8 | 1.1 |
+| 4 MiB | 6.2 | **7.3** | 6.2 | 1.0 |
+
+The 76-column MIME fast path closed most of the previous CRLF gap: the previous implementation was about 2× slower than encodify at 1 MiB, and is now roughly 10% behind it. The libraries' accepted inputs and error semantics differ; `filter+strict` includes the whitespace-filtering time.
+
+### Owned, append, streaming and parallel APIs
+
+- `encode_to_string`, `append_encode`, `decode_to_vec` and `append_decode` now write into spare `Vec` capacity instead of zero-filling it first.
+- `Decoder::feed` decodes whole groups in bulk and only falls back to the byte-wise path for padding or whitespace. A 1 MiB strict message fed in 4 KiB chunks improved from about 0.14 GB/s in the old byte-wise implementation to about 9 GB/s.
+- `encode_streaming` is the one-shot encode entry point. From 4 KiB upward it uses 16-byte non-temporal stores when the output is aligned, avoiding the output read-for-ownership. In a cold-buffer benchmark it improves 4 KiB–4 MiB encode by 1.39–1.68x over the cache-friendly `encode`; the default remains `encode` for reused or immediately reread buffers.
+- `encode_to_writer` keeps peak library memory bounded: it encodes through a fixed 64 KiB buffer. For a 256 MiB input, measured peak RSS is about 258 MiB versus 599 MiB for `encode_to_string`.
+- The optional `parallel` feature adds cache-aware `encode_parallel` / `decode_parallel`. On this i7-10700, four workers improve encode by roughly 20–25% from 4 to 6.5 MiB; at 7 MiB and above the single-thread streaming-store path is faster, so the automatic policy keeps those inputs single-threaded. Decode still uses the conservative two-worker policy until its own crossover round. See [`benchmarks/README.md`](benchmarks/README.md), [`research/encode-counters.md`](research/encode-counters.md) and [`docs/API.md`](docs/API.md).
 
 ## Features and guarantees
 
 - No allocation is required for the caller-provided buffer encode/decode APIs. Owned and append APIs allocate as needed.
-- Runtime detection is cached; short inputs use scalar paths. The Linux x86-64 AVX2 decoder uses an assembly bulk loop; other supported targets use their available SIMD or scalar path.
-- Differential tests compare the four alphabet/padding combinations against `base64`; boundary, malformed-input, whitespace, streaming and buffer tests are included.
+- Runtime detection is cached. AVX2 and BMI2 are detected independently; the BMI2 `pext` short-decode tails run only when both are present, and AVX2-only or scalar CPUs fall back without executing `pext`. Short strict decode also uses exact-length SIMD fast paths for no-padding 16/32/64/128-character inputs. The Linux x86-64 AVX2 decoder uses an assembly bulk loop; other supported targets use their available SIMD or scalar path. The optional parallel feature is feature-gated and never spawns threads from the default APIs.
+- Differential tests compare the four alphabet/padding combinations against `base64`; boundary, malformed-input, whitespace, streaming, owned/append, parallel and buffer tests are included.
 
 Run `cargo test --release --locked` to test the library. See the [API summary](docs/API.md) and the Rust documentation generated by `cargo doc --no-deps`.
 

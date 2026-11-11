@@ -98,6 +98,34 @@ fn random_lengths_and_all_small_boundaries() {
 }
 
 #[test]
+fn invalid_byte_offsets_survive_simd_tails() {
+    for size in [
+        1, 2, 3, 23, 24, 25, 31, 32, 33, 47, 48, 49, 64, 95, 96, 97, 127, 128, 191, 192, 255, 256,
+        383, 384, 511, 512, 767, 768, 1023, 1024, 1535, 1536, 2047, 2048, 3071, 3072, 4096,
+    ] {
+        let input: Vec<u8> = (0..size).map(|i| (i * 29 + 7) as u8).collect();
+        let encoded = STANDARD.encode(&input).into_bytes();
+        for position in (0..encoded.len()).step_by(7) {
+            if encoded[position] == b'=' {
+                continue;
+            }
+            let mut changed = encoded.clone();
+            changed[position] = b'!';
+            let mut output = vec![0u8; size + 8];
+            let err = yolow64::STANDARD.decode(&changed, &mut output).unwrap_err();
+            assert_eq!(
+                err,
+                Error::InvalidByte {
+                    byte: b'!',
+                    offset: position,
+                },
+                "size={size} position={position}"
+            );
+        }
+    }
+}
+
+#[test]
 fn whitespace_padding_and_invalid_inputs() {
     let codec = Codec {
         ignore_whitespace: true,
@@ -357,6 +385,146 @@ fn standard_error_text_matches_existing_crate() {
                 yolow64::decode_standard_compat(&changed),
                 STANDARD.decode(&changed).map_err(|e| e.to_string()),
                 "input={changed:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn encode_to_writer_matches_encode() {
+    let sizes = [
+        0usize,
+        1,
+        2,
+        3,
+        47 * 1024,
+        48 * 1024 - 1,
+        48 * 1024,
+        48 * 1024 + 1,
+        48 * 1024 + 2,
+        1024 * 1024,
+        1024 * 1024 + 2,
+    ];
+    for (alphabet, padding) in [
+        (Alphabet::Standard, true),
+        (Alphabet::Standard, false),
+        (Alphabet::UrlSafe, true),
+        (Alphabet::UrlSafe, false),
+    ] {
+        let codec = Codec {
+            alphabet,
+            padding,
+            ignore_whitespace: false,
+        };
+        for &size in &sizes {
+            let input: Vec<u8> = (0..size).map(|i| (i * 73 + 19) as u8).collect();
+            let expected_len = codec.encoded_len(size).unwrap();
+            let mut expected = vec![0u8; expected_len];
+            let n = codec.encode(&input, &mut expected).unwrap();
+            assert_eq!(n, expected_len);
+
+            let mut written = Vec::new();
+            codec.encode_to_writer(&input, &mut written).unwrap();
+            assert_eq!(written, expected, "size={size}");
+        }
+    }
+}
+
+#[test]
+fn exact_output_buffers_are_not_overwritten() {
+    for size in [1usize, 2, 3, 16, 24, 32, 44, 64, 96, 128, 1024, 8192] {
+        let input: Vec<u8> = (0..size).map(|i| (i * 73 + 19) as u8).collect();
+        for (alphabet, padding, reference) in [
+            (Alphabet::Standard, true, &STANDARD),
+            (Alphabet::Standard, false, &STANDARD_NO_PAD),
+            (Alphabet::UrlSafe, true, &URL_SAFE),
+            (Alphabet::UrlSafe, false, &URL_SAFE_NO_PAD),
+        ] {
+            let codec = Codec {
+                alphabet,
+                padding,
+                ignore_whitespace: false,
+            };
+            let encoded = reference.encode(&input);
+            let mut output = vec![0xa5u8; size + 16];
+            let written = codec
+                .decode(encoded.as_bytes(), &mut output[..size])
+                .unwrap();
+            assert_eq!(written, size);
+            assert_eq!(&output[..size], &input[..]);
+            assert!(
+                output[size..].iter().all(|&byte| byte == 0xa5),
+                "write past exact output for {alphabet:?} padding={padding} size={size}"
+            );
+        }
+    }
+}
+
+#[test]
+fn nonzero_trailing_bits_are_rejected() {
+    for (alphabet, reference) in [
+        (Alphabet::Standard, &STANDARD),
+        (Alphabet::UrlSafe, &URL_SAFE),
+    ] {
+        let codec = Codec {
+            alphabet,
+            padding: true,
+            ignore_whitespace: false,
+        };
+        for &payload in &[1usize, 2, 16, 32, 128] {
+            let input = vec![0u8; payload];
+            let encoded = reference.encode(&input);
+            let mut bad = encoded.as_bytes().to_vec();
+            let last = bad.iter().rposition(|&byte| byte != b'=').unwrap();
+            bad[last] = if bad[last] == b'B' { b'C' } else { b'B' };
+            assert!(
+                reference.decode(&bad).is_err(),
+                "reference accepted nonzero trailing bits: {alphabet:?} {payload}"
+            );
+            let mut output = vec![0u8; payload];
+            assert!(
+                codec.decode(&bad, &mut output).is_err(),
+                "codec accepted nonzero trailing bits: {alphabet:?} {payload}"
+            );
+        }
+    }
+}
+
+#[test]
+fn streaming_encode_exact_output_canary() {
+    for size in [4096usize, 65536, 1024 * 1024] {
+        let input: Vec<u8> = (0..size).map(|i| (i * 73 + 19) as u8).collect();
+        for (alphabet, padding, reference) in [
+            (Alphabet::Standard, true, &STANDARD),
+            (Alphabet::Standard, false, &STANDARD_NO_PAD),
+            (Alphabet::UrlSafe, true, &URL_SAFE),
+            (Alphabet::UrlSafe, false, &URL_SAFE_NO_PAD),
+        ] {
+            let codec = Codec {
+                alphabet,
+                padding,
+                ignore_whitespace: false,
+            };
+            let encoded_len = codec.encoded_len(size).unwrap();
+            let mut storage = vec![0xa5u8; encoded_len + 128];
+            let start = (64 - storage.as_ptr() as usize % 64) % 64;
+            let written = codec
+                .encode_streaming(&input, &mut storage[start..start + encoded_len])
+                .unwrap();
+            assert_eq!(written, encoded_len);
+            assert_eq!(
+                &storage[start..start + encoded_len],
+                reference.encode(&input).as_bytes()
+            );
+            assert!(
+                storage[..start].iter().all(|&byte| byte == 0xa5),
+                "write before aligned output: {alphabet:?} padding={padding} size={size}"
+            );
+            assert!(
+                storage[start + encoded_len..]
+                    .iter()
+                    .all(|&byte| byte == 0xa5),
+                "write past exact streaming output: {alphabet:?} padding={padding} size={size}"
             );
         }
     }

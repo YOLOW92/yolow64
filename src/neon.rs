@@ -5,7 +5,11 @@ use std::arch::aarch64::*;
 /// # Safety
 /// The CPU must support NEON, and `output` must fit every encoded group.
 #[target_feature(enable = "neon")]
-pub(crate) unsafe fn encode(input: &[u8], output: &mut [u8], alphabet: Alphabet) -> usize {
+pub(crate) unsafe fn encode(
+    input: &[u8],
+    output: &mut [std::mem::MaybeUninit<u8>],
+    alphabet: Alphabet,
+) -> usize {
     let mut at = 0;
     while input.len().saturating_sub(at) >= 16 {
         // SAFETY: input has at least 16 bytes; output has 16 bytes per
@@ -40,7 +44,7 @@ pub(crate) unsafe fn encode(input: &[u8], output: &mut [u8], alphabet: Alphabet)
             };
             result = vsubq_u8(result, vandq_u8(gt61, vdupq_n_u8(adjust62)));
             result = vaddq_u8(result, vandq_u8(gt62, vdupq_n_u8(adjust63)));
-            vst1q_u8(output.as_mut_ptr().add(at / 12 * 16), result);
+            vst1q_u8(output.as_mut_ptr().add(at / 12 * 16).cast(), result);
         }
         at += 12;
     }
@@ -52,7 +56,7 @@ pub(crate) unsafe fn encode(input: &[u8], output: &mut [u8], alphabet: Alphabet)
 #[target_feature(enable = "neon")]
 pub(crate) unsafe fn decode(
     input: &[u8],
-    output: &mut [u8],
+    output: &mut [std::mem::MaybeUninit<u8>],
     alphabet: Alphabet,
 ) -> Result<usize, usize> {
     let blocks = input.len() / 16;
@@ -106,9 +110,9 @@ pub(crate) unsafe fn decode(
             for group in 0..4 {
                 let i = group * 4;
                 let o = block * 12 + group * 3;
-                output[o] = digits[i] << 2 | digits[i + 1] >> 4;
-                output[o + 1] = digits[i + 1] << 4 | digits[i + 2] >> 2;
-                output[o + 2] = digits[i + 2] << 6 | digits[i + 3];
+                output[o].write(digits[i] << 2 | digits[i + 1] >> 4);
+                output[o + 1].write(digits[i + 1] << 4 | digits[i + 2] >> 2);
+                output[o + 2].write(digits[i + 2] << 6 | digits[i + 3]);
             }
         }
     }

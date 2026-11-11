@@ -3,11 +3,24 @@ name = "yolow64-compare"
 version = "0.1.0"
 edition = "2024"
 publish = false
+build = "build.rs"
 
 [dependencies]
-yolow64 = { path = "../.." }
+yolow64 = { path = "../..", features = ["parallel"] }
 base64 = "=0.23.1"
 base64-simd = "=0.8.0"
+base64-turbo = "=0.6.0"
+encodify = "=1.0.2"
+simdutf = "=0.7.0"
+base64-ng = { version = "=2.1.0", features = ["simd"] }
+data-encoding = "=2.11.1"
+base64ct = "=1.8.3"
+base64_light = "=0.1.6"
+simple-base64 = "=0.23.2"
+fast32 = "=1.0.3"
+tape-base64 = "=0.1.0"
+radix64 = "=0.6.2"
+base64-url = "=4.0.1"
 
 [profile.release]
 lto = "fat"

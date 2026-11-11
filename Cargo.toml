@@ -1,6 +1,6 @@
 [package]
 name = "yolow64"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.89"
 description = "Base64 encoding and decoding with SIMD acceleration"
@@ -9,6 +9,10 @@ repository = "https://github.com/YOLOW92/yolow64"
 readme = "README.md"
 keywords = ["base64", "simd", "encoding", "decoding"]
 categories = ["encoding"]
+
+[features]
+default = []
+parallel = []
 
 [dev-dependencies]
 base64 = "=0.23.1"

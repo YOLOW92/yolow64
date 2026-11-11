@@ -1,0 +1,3 @@
+mode,size_mib,max_rss_kb,elapsed_s
+string,256,613640,0.21
+writer,256,264256,0.10
