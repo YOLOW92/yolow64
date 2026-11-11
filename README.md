@@ -29,7 +29,7 @@ While building [PageSift](https://github.com/YOLOW92/pagesift), we needed Base64
 
 ## Release notes
 
-See [`CHANGELOG.md`](CHANGELOG.md) for the 0.2.0 performance, compatibility and safety changes, and [`research/`](research/README.md) for the complete experiment record including rejected kernels.
+See [`CHANGELOG.md`](CHANGELOG.md) for the 0.2.x performance, compatibility and safety changes, and [`research/`](research/README.md) for the complete experiment record including rejected kernels.
 
 ## Install
 

@@ -29,7 +29,7 @@
 
 ## 发布说明
 
-0.2.0 的性能、兼容性和安全改动见 [`CHANGELOG.md`](../CHANGELOG.md)；完整实验记录（包括被否决的内核）见 [`research/`](../research/README.md)。
+0.2.x 的性能、兼容性和安全改动见 [`CHANGELOG.md`](../CHANGELOG.md)；完整实验记录（包括被否决的内核）见 [`research/`](../research/README.md)。
 
 ## 安装
 

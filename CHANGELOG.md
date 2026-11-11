@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1 — 2026-11-11
+
+Documentation-only patch.
+
+- Point installation at crates.io (`yolow64 = "0.2"`).
+- No code, validation or benchmark changes.
+
 ## 0.2.0 — 2026-11-11
 
 Performance and compatibility release.
