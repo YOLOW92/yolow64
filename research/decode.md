@@ -30,14 +30,14 @@ Data:
 
 Eight-library medians, GB/s (higher is better):
 
-| Input | yolow64 (before) | yolow64 (shipped) | Turbo full-check | Turbo default (partial) |
-|---:|---:|---:|---:|---:|
-| 8 KiB | 18.31 | **19.64** | 20.06 | 26.34 |
-| 16 KiB | 18.53 | **19.54** | 19.68 | 26.41 |
-| 64 KiB | 18.76 | **20.08** | 19.36 | 26.90 |
-| 256 KiB | 19.08 | **20.16** | 16.76 | 20.80 |
-| 1 MiB | 19.18 | **20.17** | 16.68 | 20.57 |
-| 4 MiB | 16.62 | 17.06 | 13.89 | 17.01 |
+| Input | yolow64 (before) | yolow64 (v0.2) | yolow64 (v0.3) | Turbo full-check | Turbo default (partial) |
+|---:|---:|---:|---:|---:|---:|
+| 8 KiB | 18.31 | 19.64 | **20.41** | 20.06 | 26.34 |
+| 16 KiB | 18.53 | 19.54 | **19.95** | 19.68 | 26.41 |
+| 64 KiB | 18.76 | 20.08 | **20.36** | 19.36 | 26.90 |
+| 256 KiB | 19.08 | 20.16 | **20.33** | 16.76 | 20.80 |
+| 1 MiB | 19.18 | 20.17 | **20.40** | 16.68 | 20.57 |
+| 4 MiB | 16.62 | 17.06 | **17.11** | 13.89 | 17.01 |
 
 The Turbo columns are the 2026-11-11 verification rebuild
 ([`turbo-check.md`](turbo-check.md)). The earlier snapshot was 20.19 / 19.70 /
@@ -58,7 +58,8 @@ Short decode, ns/call:
 
 | Input | 8 B | 12 B | 16 B | 24 B | 32 B | 48 B | 64 B | 96 B | 128 B |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| yolow64 | 14.26 | **7.00** | **8.53** | **10.14** | 19.14 | **12.20** | 23.18 | **15.68** | **17.18** |
+| yolow64 (v0.2) | 14.26 | 7.00 | 8.53 | 10.14 | 19.14 | 12.20 | 23.18 | 15.68 | 17.18 |
+| **yolow64 (v0.3)** | **5.47** | **5.04** | **5.69** | **7.87** | **6.89** | **9.69** | **10.96** | **13.02** | **14.24** |
 
 The exact-length fast path shipped: 16-character (12 B), 32-character (24 B),
 64-character (48 B) and 128-character (96 B) inputs with no trailing padding

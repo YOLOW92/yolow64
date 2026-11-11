@@ -183,3 +183,46 @@ fn parallel_output_too_small() {
         Err(Error::OutputTooSmall)
     );
 }
+
+#[test]
+fn parallel_rejects_trailing_unpadded_and_malformed_lengths() {
+    for alphabet in [Alphabet::Standard, Alphabet::UrlSafe] {
+        for padding in [true, false] {
+            let codec = Codec {
+                alphabet,
+                padding,
+                ignore_whitespace: false,
+            };
+            for base_quads in [2usize, 8, 64] {
+                let prefix = vec![b'A'; base_quads * 4];
+                for tail in [
+                    &b"T"[..],
+                    &b"TQ"[..],
+                    &b"TWE"[..],
+                    &b"TQ="[..],
+                    &b"T="[..],
+                    &b"=="[..],
+                    &b"A!"[..],
+                ] {
+                    let mut sample = prefix.clone();
+                    sample.extend_from_slice(tail);
+                    let mut single_out = vec![0xa5u8; sample.len()];
+                    let single = codec.decode(&sample, &mut single_out);
+                    for threads in [1, 2, 4] {
+                        let mut parallel_out = vec![0xa5u8; sample.len()];
+                        let parallel =
+                            codec.decode_parallel_with_threads(&sample, &mut parallel_out, threads);
+                        assert_eq!(
+                            parallel, single,
+                            "codec={codec:?} base_quads={base_quads} tail={tail:?} threads={threads}"
+                        );
+                        if let Ok(n) = parallel {
+                            assert_eq!(&parallel_out[..n], &single_out[..n]);
+                            assert!(parallel_out[n..].iter().all(|&b| b == 0xa5));
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

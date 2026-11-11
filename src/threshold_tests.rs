@@ -6,7 +6,7 @@ use std::{hint::black_box, time::Instant};
 #[ignore = "timing, run separately under the benchmark lock"]
 #[cfg(target_arch = "x86_64")]
 fn decode_crossover() {
-    if !crate::avx2_available() {
+    if !crate::cpu::avx2_available() {
         return;
     }
     println!("encoded_bytes,scalar_ns,short_ns,simd_ns");
@@ -60,7 +60,7 @@ fn decode_short_lab() {
     use base64::Engine as _;
     use std::mem::MaybeUninit;
 
-    if !crate::avx2_available() {
+    if !crate::cpu::avx2_available() {
         return;
     }
     fn measure(mut f: impl FnMut(), iters: usize) -> f64 {
@@ -284,7 +284,7 @@ fn pext_lab() {
     use base64::Engine as _;
     use std::mem::MaybeUninit;
 
-    if !std::is_x86_feature_detected!("bmi2") || !crate::avx2_available() {
+    if !std::is_x86_feature_detected!("bmi2") || !crate::cpu::avx2_available() {
         return;
     }
     const fn table() -> [u8; 256] {
@@ -474,10 +474,10 @@ fn bmi2_fallback_short_paths() {
     struct Reset;
     impl Drop for Reset {
         fn drop(&mut self) {
-            crate::FORCE_NO_BMI2.with(|forced| forced.set(false));
+            crate::cpu::FORCE_NO_BMI2.with(|forced| forced.set(false));
         }
     }
-    crate::FORCE_NO_BMI2.with(|forced| forced.set(true));
+    crate::cpu::FORCE_NO_BMI2.with(|forced| forced.set(true));
     let _reset = Reset;
 
     for (alphabet, reference) in [
@@ -495,7 +495,7 @@ fn bmi2_fallback_short_paths() {
             padding: true,
             ignore_whitespace: false,
         };
-        for &payload in &[16usize, 32, 128] {
+        for &payload in &[8usize, 12, 16, 24, 32, 48, 64, 96, 128, 8192, 16384] {
             let raw: Vec<u8> = (0..payload).map(|i| (i * 29 + 7) as u8).collect();
             let encoded = reference.encode(&raw).into_bytes();
             let mut output = vec![0u8; payload];
@@ -505,6 +505,77 @@ fn bmi2_fallback_short_paths() {
             let mut bad = encoded.clone();
             bad[0] = b'!';
             assert!(codec.decode(&bad, &mut output).is_err());
+        }
+    }
+}
+
+/// Exercise the no-AVX2 scalar fallback on a CPU that supports AVX2. The
+/// override is thread-local so parallel tests are unaffected.
+#[test]
+#[cfg(target_arch = "x86_64")]
+fn no_avx2_fallback_paths() {
+    use base64::Engine as _;
+
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            crate::cpu::FORCE_NO_AVX2.with(|forced| forced.set(false));
+        }
+    }
+    crate::cpu::FORCE_NO_AVX2.with(|forced| forced.set(true));
+    let _reset = Reset;
+
+    assert!(!crate::cpu::avx2_available());
+    for (alphabet, padding, reference) in [
+        (
+            Alphabet::Standard,
+            true,
+            &base64::engine::general_purpose::STANDARD,
+        ),
+        (
+            Alphabet::Standard,
+            false,
+            &base64::engine::general_purpose::STANDARD_NO_PAD,
+        ),
+        (
+            Alphabet::UrlSafe,
+            true,
+            &base64::engine::general_purpose::URL_SAFE,
+        ),
+        (
+            Alphabet::UrlSafe,
+            false,
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+        ),
+    ] {
+        for ignore_whitespace in [false, true] {
+            let codec = crate::Codec {
+                alphabet,
+                padding,
+                ignore_whitespace,
+            };
+            for &payload in &[0usize, 1, 2, 3, 8, 12, 16, 24, 32, 48, 64, 128, 4097] {
+                let raw: Vec<u8> = (0..payload).map(|i| (i * 29 + 7) as u8).collect();
+                let expected = reference.encode(&raw);
+                let encoded = codec.encode_to_string(&raw).unwrap();
+                assert_eq!(encoded, expected, "encode mismatch for {codec:?} {payload}");
+
+                let mut wire = encoded.as_bytes().to_vec();
+                if ignore_whitespace && !wire.is_empty() {
+                    let mid = wire.len() / 2;
+                    wire.splice(mid..mid, *b" \r\n\t");
+                }
+                let decoded = codec.decode_to_vec(&wire).unwrap();
+                assert_eq!(decoded, raw, "decode mismatch for {codec:?} {payload}");
+
+                let mut stream = crate::Decoder::new(codec);
+                let mut stream_out = Vec::new();
+                let split = wire.len() / 2;
+                stream.feed(&wire[..split], &mut stream_out).unwrap();
+                stream.feed(&wire[split..], &mut stream_out).unwrap();
+                stream.finish(&mut stream_out).unwrap();
+                assert_eq!(stream_out, raw, "stream mismatch for {codec:?} {payload}");
+            }
         }
     }
 }
@@ -562,7 +633,7 @@ fn decode_variant_lab() {
                         }
                         2 => {
                             black_box(unsafe {
-                                crate::avx2::decode_batch4(
+                                crate::avx2::lab::decode_batch4(
                                     black_box(&input),
                                     black_box(&mut batch_out),
                                     crate::Alphabet::Standard,
@@ -680,7 +751,7 @@ fn encode_variant_lab() {
                         }
                         _ => {
                             black_box(unsafe {
-                                crate::avx2::encode_unroll8(
+                                crate::avx2::lab::encode_unroll8(
                                     black_box(&input),
                                     black_box(&mut unroll8_out),
                                     crate::Alphabet::Standard,
@@ -764,7 +835,7 @@ fn encode_countloop_lab() {
                         });
                     } else {
                         black_box(unsafe {
-                            crate::avx2::encode_countloop(
+                            crate::avx2::lab::encode_countloop(
                                 black_box(&input),
                                 black_box(&mut count_out),
                                 crate::Alphabet::Standard,
@@ -827,7 +898,7 @@ fn encode_hybrid_lab() {
                         });
                     } else {
                         black_box(unsafe {
-                            crate::avx2::encode_hybrid(
+                            crate::avx2::lab::encode_hybrid(
                                 black_box(&input),
                                 black_box(&mut hybrid_out),
                                 crate::Alphabet::Standard,
@@ -890,7 +961,7 @@ fn encode_unroll8seq_lab() {
                         });
                     } else {
                         black_box(unsafe {
-                            crate::avx2::encode_unroll8_seq(
+                            crate::avx2::lab::encode_unroll8_seq(
                                 black_box(&input),
                                 black_box(&mut seq_out),
                                 crate::Alphabet::Standard,
@@ -944,7 +1015,7 @@ fn encode_public_lab() {
             for step in 0..variants.len() {
                 let which = (step + round) % variants.len();
                 let variant = variants[which];
-                crate::ENCODE_VARIANT.store(variant, Ordering::Relaxed);
+                crate::avx2::lab::ENCODE_VARIANT.store(variant, Ordering::Relaxed);
                 let start = std::time::Instant::now();
                 for _ in 0..iters {
                     black_box(
@@ -956,7 +1027,7 @@ fn encode_public_lab() {
                 sample[which] = start.elapsed().as_secs_f64() * 1e9 / iters as f64;
             }
         }
-        crate::ENCODE_VARIANT.store(0, Ordering::Relaxed);
+        crate::avx2::lab::ENCODE_VARIANT.store(0, Ordering::Relaxed);
         let mut med = [0f64; 4];
         for (i, m) in med.iter_mut().enumerate() {
             let mut values: Vec<f64> = (0..rounds).map(|r| samples[r][i]).collect();
@@ -1016,7 +1087,7 @@ fn encode_mixed_lab() {
                         }
                         1 => {
                             black_box(unsafe {
-                                crate::avx2::encode_unroll8_seq(
+                                crate::avx2::lab::encode_unroll8_seq(
                                     black_box(&input),
                                     black_box(&mut seq_out),
                                     crate::Alphabet::Standard,
@@ -1025,7 +1096,7 @@ fn encode_mixed_lab() {
                         }
                         _ => {
                             black_box(unsafe {
-                                crate::avx2::encode_unroll8_mixed(
+                                crate::avx2::lab::encode_unroll8_mixed(
                                     black_box(&input),
                                     black_box(&mut mixed_out),
                                     crate::Alphabet::Standard,
@@ -1096,7 +1167,7 @@ fn encode_phased_lab() {
                         }
                         1 => {
                             black_box(unsafe {
-                                crate::avx2::encode_unroll8_seq(
+                                crate::avx2::lab::encode_unroll8_seq(
                                     black_box(&input),
                                     black_box(&mut seq_out),
                                     crate::Alphabet::Standard,
@@ -1105,7 +1176,7 @@ fn encode_phased_lab() {
                         }
                         _ => {
                             black_box(unsafe {
-                                crate::avx2::encode_load16_phased(
+                                crate::avx2::lab::encode_load16_phased(
                                     black_box(&input),
                                     black_box(&mut phased_out),
                                     crate::Alphabet::Standard,
@@ -1176,7 +1247,7 @@ fn encode_2phase_lab() {
                         }
                         1 => {
                             black_box(unsafe {
-                                crate::avx2::encode_unroll8_seq(
+                                crate::avx2::lab::encode_unroll8_seq(
                                     black_box(&input),
                                     black_box(&mut seq_out),
                                     crate::Alphabet::Standard,
@@ -1185,7 +1256,7 @@ fn encode_2phase_lab() {
                         }
                         _ => {
                             black_box(unsafe {
-                                crate::avx2::encode_unroll8_2phase(
+                                crate::avx2::lab::encode_unroll8_2phase(
                                     black_box(&input),
                                     black_box(&mut two_out),
                                     crate::Alphabet::Standard,
@@ -1256,7 +1327,7 @@ fn encode_split_lab() {
                         }
                         1 => {
                             black_box(unsafe {
-                                crate::avx2::encode_unroll8_seq(
+                                crate::avx2::lab::encode_unroll8_seq(
                                     black_box(&input),
                                     black_box(&mut seq_out),
                                     crate::Alphabet::Standard,
@@ -1336,7 +1407,7 @@ fn encode_load16u8_lab() {
                         }
                         1 => {
                             black_box(unsafe {
-                                crate::avx2::encode_unroll8_seq(
+                                crate::avx2::lab::encode_unroll8_seq(
                                     black_box(&input),
                                     black_box(&mut seq_out),
                                     crate::Alphabet::Standard,
@@ -1345,7 +1416,7 @@ fn encode_load16u8_lab() {
                         }
                         _ => {
                             black_box(unsafe {
-                                crate::avx2::encode_load16_u8(
+                                crate::avx2::lab::encode_load16_u8(
                                     black_box(&input),
                                     black_box(&mut l16_out),
                                     crate::Alphabet::Standard,
@@ -1416,7 +1487,7 @@ fn encode_asm_lab() {
                         }
                         1 => {
                             black_box(unsafe {
-                                crate::avx2::encode_unroll8_seq(
+                                crate::avx2::lab::encode_unroll8_seq(
                                     black_box(&input),
                                     black_box(&mut seq_out),
                                     crate::Alphabet::Standard,
@@ -1425,7 +1496,7 @@ fn encode_asm_lab() {
                         }
                         _ => {
                             black_box(unsafe {
-                                crate::avx2::encode_asm_load16(
+                                crate::avx2::lab::encode_asm_load16(
                                     black_box(&input),
                                     black_box(&mut asm_out),
                                     crate::Alphabet::Standard,
@@ -1481,7 +1552,7 @@ fn encode_public_split_lab() {
         for (round, sample) in samples.iter_mut().enumerate() {
             for step in 0..2 {
                 let which = (step + round) % 2;
-                crate::ENCODE_VARIANT.store(if which == 0 { 1 } else { 5 }, Ordering::Relaxed);
+                crate::avx2::lab::ENCODE_VARIANT.store(if which == 0 { 1 } else { 5 }, Ordering::Relaxed);
                 let start = std::time::Instant::now();
                 for _ in 0..iters {
                     black_box(
@@ -1500,7 +1571,7 @@ fn encode_public_split_lab() {
                 sample[which] = start.elapsed().as_secs_f64() * 1e9 / iters as f64;
             }
         }
-        crate::ENCODE_VARIANT.store(0, Ordering::Relaxed);
+        crate::avx2::lab::ENCODE_VARIANT.store(0, Ordering::Relaxed);
         let mut med = [0f64; 2];
         for (i, m) in med.iter_mut().enumerate() {
             let mut values: Vec<f64> = (0..rounds).map(|r| samples[r][i]).collect();
@@ -1563,7 +1634,7 @@ fn encode_turbo8_lab() {
                         }
                         _ => {
                             black_box(unsafe {
-                                crate::avx2::encode_load16_turbo8(
+                                crate::avx2::lab::encode_load16_turbo8(
                                     black_box(&input),
                                     black_box(&mut t8_out),
                                     crate::Alphabet::Standard,
@@ -1655,7 +1726,7 @@ fn encode_crossover_lab() {
         let output = &mut output_store[output_offset..output_offset + cap];
         let iters = (256 * 1024 / size.max(1)).clamp(64, 20_000);
         for &(variant, name) in &variants {
-            crate::ENCODE_VARIANT.store(variant, Ordering::Relaxed);
+            crate::avx2::lab::ENCODE_VARIANT.store(variant, Ordering::Relaxed);
             let mut ns_samples = Vec::with_capacity(rounds);
             let mut cycle_samples = Vec::with_capacity(rounds);
             for _ in 0..rounds {
@@ -1676,7 +1747,7 @@ fn encode_crossover_lab() {
                 ns_samples.push(ns);
                 cycle_samples.push(cycles);
             }
-            crate::ENCODE_VARIANT.store(0, Ordering::Relaxed);
+            crate::avx2::lab::ENCODE_VARIANT.store(0, Ordering::Relaxed);
             ns_samples.sort_by(f64::total_cmp);
             cycle_samples.sort_by(f64::total_cmp);
             let ns = ns_samples[rounds / 2];
@@ -1695,10 +1766,10 @@ fn encode_crossover_lab() {
 fn streaming_encode_matches_reference() {
     use base64::Engine as _;
 
-    if !crate::avx2_available() {
+    if !crate::cpu::avx2_available() {
         return;
     }
-    let floor = crate::stream_floor();
+    let floor = crate::cpu::stream_floor();
     if floor == usize::MAX || floor > 32 * 1024 * 1024 {
         return;
     }
@@ -1737,7 +1808,7 @@ fn streaming_encode_matches_reference() {
 fn encode_16_matches_reference() {
     use base64::Engine as _;
 
-    if !crate::avx2_available() {
+    if !crate::cpu::avx2_available() {
         return;
     }
     let url = crate::Codec {
@@ -1780,7 +1851,7 @@ fn encode_16_matches_reference() {
 fn encode_streaming_api_matches_reference() {
     use base64::Engine as _;
 
-    if !crate::avx2_available() {
+    if !crate::cpu::avx2_available() {
         return;
     }
     let url_codec = crate::Codec {
@@ -1881,9 +1952,9 @@ fn encode_nt_lab() {
             for step in 0..variants.len() {
                 let idx = (step + round) % variants.len();
                 let (variant, _, prefetch_distance, prefetch_nta) = variants[idx];
-                crate::ENCODE_VARIANT.store(variant, Ordering::Relaxed);
-                crate::ENCODE_PREFETCH_DISTANCE.store(prefetch_distance, Ordering::Relaxed);
-                crate::ENCODE_PREFETCH_NTA.store(prefetch_nta, Ordering::Relaxed);
+                crate::avx2::lab::ENCODE_VARIANT.store(variant, Ordering::Relaxed);
+                crate::avx2::lab::ENCODE_PREFETCH_DISTANCE.store(prefetch_distance, Ordering::Relaxed);
+                crate::avx2::lab::ENCODE_PREFETCH_NTA.store(prefetch_nta, Ordering::Relaxed);
                 let start_t = std::time::Instant::now();
                 // SAFETY: `_rdtsc` is available on x86_64.
                 let start_c = unsafe { std::arch::x86_64::_rdtsc() };
@@ -1900,9 +1971,9 @@ fn encode_nt_lab() {
                 cycles[idx].push((end_c.wrapping_sub(start_c)) as f64 / iters as f64);
             }
         }
-        crate::ENCODE_VARIANT.store(0, Ordering::Relaxed);
-        crate::ENCODE_PREFETCH_DISTANCE.store(8192, Ordering::Relaxed);
-        crate::ENCODE_PREFETCH_NTA.store(false, Ordering::Relaxed);
+        crate::avx2::lab::ENCODE_VARIANT.store(0, Ordering::Relaxed);
+        crate::avx2::lab::ENCODE_PREFETCH_DISTANCE.store(8192, Ordering::Relaxed);
+        crate::avx2::lab::ENCODE_PREFETCH_NTA.store(false, Ordering::Relaxed);
         for (idx, (_, name, _, _)) in variants.iter().enumerate() {
             series[idx].sort_by(f64::total_cmp);
             cycles[idx].sort_by(f64::total_cmp);
@@ -1967,10 +2038,10 @@ fn encode_prefetch_lab() {
             for step in 0..variants.len() {
                 let idx = (step + round) % variants.len();
                 let (distance, nta, wide, _) = variants[idx];
-                crate::ENCODE_VARIANT.store(7, Ordering::Relaxed);
-                crate::ENCODE_PREFETCH_DISTANCE.store(distance, Ordering::Relaxed);
-                crate::ENCODE_PREFETCH_NTA.store(nta, Ordering::Relaxed);
-                crate::ENCODE_PREFETCH_WIDE.store(wide, Ordering::Relaxed);
+                crate::avx2::lab::ENCODE_VARIANT.store(7, Ordering::Relaxed);
+                crate::avx2::lab::ENCODE_PREFETCH_DISTANCE.store(distance, Ordering::Relaxed);
+                crate::avx2::lab::ENCODE_PREFETCH_NTA.store(nta, Ordering::Relaxed);
+                crate::avx2::lab::ENCODE_PREFETCH_WIDE.store(wide, Ordering::Relaxed);
                 let start_t = std::time::Instant::now();
                 // SAFETY: `_rdtsc` is available on x86_64.
                 let start_c = unsafe { std::arch::x86_64::_rdtsc() };
@@ -1987,10 +2058,10 @@ fn encode_prefetch_lab() {
                 cycles[idx].push((end_c.wrapping_sub(start_c)) as f64 / iters as f64);
             }
         }
-        crate::ENCODE_VARIANT.store(0, Ordering::Relaxed);
-        crate::ENCODE_PREFETCH_DISTANCE.store(8192, Ordering::Relaxed);
-        crate::ENCODE_PREFETCH_NTA.store(false, Ordering::Relaxed);
-        crate::ENCODE_PREFETCH_WIDE.store(false, Ordering::Relaxed);
+        crate::avx2::lab::ENCODE_VARIANT.store(0, Ordering::Relaxed);
+        crate::avx2::lab::ENCODE_PREFETCH_DISTANCE.store(8192, Ordering::Relaxed);
+        crate::avx2::lab::ENCODE_PREFETCH_NTA.store(false, Ordering::Relaxed);
+        crate::avx2::lab::ENCODE_PREFETCH_WIDE.store(false, Ordering::Relaxed);
         for (idx, (_, _, _, name)) in variants.iter().enumerate() {
             series[idx].sort_by(f64::total_cmp);
             cycles[idx].sort_by(f64::total_cmp);
@@ -2063,10 +2134,10 @@ fn encode_cold_lab() {
         let step = step.max(1);
         let iters = (32 * 1024 * 1024 / size).clamp(4, 8192);
         for &(variant, name) in &variants {
-            crate::ENCODE_VARIANT.store(variant, Ordering::Relaxed);
-            crate::ENCODE_PREFETCH_DISTANCE.store(8192, Ordering::Relaxed);
-            crate::ENCODE_PREFETCH_NTA.store(false, Ordering::Relaxed);
-            crate::ENCODE_PREFETCH_WIDE.store(true, Ordering::Relaxed);
+            crate::avx2::lab::ENCODE_VARIANT.store(variant, Ordering::Relaxed);
+            crate::avx2::lab::ENCODE_PREFETCH_DISTANCE.store(8192, Ordering::Relaxed);
+            crate::avx2::lab::ENCODE_PREFETCH_NTA.store(false, Ordering::Relaxed);
+            crate::avx2::lab::ENCODE_PREFETCH_WIDE.store(true, Ordering::Relaxed);
             let mut samples = Vec::with_capacity(rounds);
             let mut cycles = Vec::with_capacity(rounds);
             for round in 0..rounds {
@@ -2092,7 +2163,7 @@ fn encode_cold_lab() {
                 samples.push(start_t.elapsed().as_secs_f64() * 1e9 / iters as f64);
                 cycles.push((end_c.wrapping_sub(start_c)) as f64 / iters as f64 / size as f64);
             }
-            crate::ENCODE_VARIANT.store(0, Ordering::Relaxed);
+            crate::avx2::lab::ENCODE_VARIANT.store(0, Ordering::Relaxed);
             samples.sort_by(f64::total_cmp);
             cycles.sort_by(f64::total_cmp);
             let ns = samples[rounds / 2];
@@ -2157,7 +2228,7 @@ fn encode_profile_one() {
     }
     let cap = crate::STANDARD.encoded_len(size).unwrap() + 64;
     let mut output = vec![0u8; cap];
-    crate::ENCODE_VARIANT.store(variant, Ordering::Relaxed);
+    crate::avx2::lab::ENCODE_VARIANT.store(variant, Ordering::Relaxed);
     let mut checksum = 0usize;
     for _ in 0..iters {
         checksum = checksum.wrapping_add(
@@ -2166,7 +2237,7 @@ fn encode_profile_one() {
                 .unwrap(),
         );
     }
-    crate::ENCODE_VARIANT.store(0, Ordering::Relaxed);
+    crate::avx2::lab::ENCODE_VARIANT.store(0, Ordering::Relaxed);
     black_box(checksum);
 }
 

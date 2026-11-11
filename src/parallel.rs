@@ -37,7 +37,7 @@ fn detected_llc() -> Option<usize> {
     *LLC.get_or_init(|| {
         #[cfg(target_arch = "x86_64")]
         {
-            crate::llc_bytes()
+            crate::cpu::llc_bytes()
         }
         #[cfg(all(not(target_arch = "x86_64"), target_os = "linux"))]
         {
@@ -233,7 +233,10 @@ impl Codec {
                 handles.push(scope.spawn(move || self.encode(input, out_chunk)));
             }
             for handle in handles {
-                results.push(handle.join().unwrap_or(Err(Error::InvalidLength)));
+                match handle.join() {
+                    Ok(result) => results.push(result),
+                    Err(panic) => std::panic::resume_unwind(panic),
+                }
             }
         });
 
@@ -283,7 +286,7 @@ impl Codec {
         min_len: usize,
         cache_limit: usize,
     ) -> Result<usize, Error> {
-        if self.ignore_whitespace {
+        if self.ignore_whitespace || (self.padding && !input.len().is_multiple_of(4)) {
             return self.decode(input, output);
         }
         let len = self.allocation_len(input)?;
@@ -355,7 +358,10 @@ impl Codec {
                 );
             }
             for handle in handles {
-                results.push(handle.join().unwrap_or(Ok(0)));
+                match handle.join() {
+                    Ok(result) => results.push(result),
+                    Err(panic) => std::panic::resume_unwind(panic),
+                }
             }
         });
 

@@ -33,12 +33,15 @@ impl Aligned {
 }
 
 const SIZES: &[usize] = &[8192, 16384, 65536, 262144, 1048576, 4194304];
+const SHORT_SIZES: &[usize] = &[8, 12, 16, 24, 32, 48, 64, 96, 128];
 
 fn iterations(size: usize) -> usize {
     (8 * 1024 * 1024 / size).clamp(16, 200_000)
 }
 
 fn main() {
+    let short_mode = std::env::args().any(|a| a == "--short");
+    let sizes = if short_mode { SHORT_SIZES } else { SIZES };
     // Raise the core clock before the first, smallest size. Without this the
     // 8 KiB cell starts at the idle frequency and is not comparable with the
     // eight-library harness, which runs after the short and medium groups.
@@ -57,7 +60,7 @@ fn main() {
             );
         }
     }
-    for &size in SIZES {
+    for &size in sizes {
         let raw: Vec<u8> = (0..size).map(|i| (i * 73 + 19) as u8).collect();
         let encoded_bytes = base64::engine::general_purpose::STANDARD
             .encode(&raw)

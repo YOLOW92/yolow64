@@ -100,8 +100,9 @@ fn random_lengths_and_all_small_boundaries() {
 #[test]
 fn invalid_byte_offsets_survive_simd_tails() {
     for size in [
-        1, 2, 3, 23, 24, 25, 31, 32, 33, 47, 48, 49, 64, 95, 96, 97, 127, 128, 191, 192, 255, 256,
-        383, 384, 511, 512, 767, 768, 1023, 1024, 1535, 1536, 2047, 2048, 3071, 3072, 4096,
+        1, 2, 3, 8, 12, 16, 23, 24, 25, 31, 32, 33, 47, 48, 49, 64, 95, 96, 97, 127, 128, 191, 192,
+        255, 256, 383, 384, 511, 512, 767, 768, 1023, 1024, 1535, 1536, 2047, 2048, 3071, 3072,
+        4096, 8192, 16384,
     ] {
         let input: Vec<u8> = (0..size).map(|i| (i * 29 + 7) as u8).collect();
         let encoded = STANDARD.encode(&input).into_bytes();
@@ -432,7 +433,7 @@ fn encode_to_writer_matches_encode() {
 
 #[test]
 fn exact_output_buffers_are_not_overwritten() {
-    for size in [1usize, 2, 3, 16, 24, 32, 44, 64, 96, 128, 1024, 8192] {
+    for size in [1usize, 2, 3, 8, 12, 16, 24, 32, 44, 48, 64, 96, 128, 1024, 8192, 16384] {
         let input: Vec<u8> = (0..size).map(|i| (i * 73 + 19) as u8).collect();
         for (alphabet, padding, reference) in [
             (Alphabet::Standard, true, &STANDARD),
@@ -471,7 +472,7 @@ fn nonzero_trailing_bits_are_rejected() {
             padding: true,
             ignore_whitespace: false,
         };
-        for &payload in &[1usize, 2, 16, 32, 128] {
+        for &payload in &[1usize, 2, 8, 16, 32, 64, 128, 8192, 16384] {
             let input = vec![0u8; payload];
             let encoded = reference.encode(&input);
             let mut bad = encoded.as_bytes().to_vec();
@@ -526,6 +527,62 @@ fn streaming_encode_exact_output_canary() {
                     .all(|&byte| byte == 0xa5),
                 "write past exact streaming output: {alphabet:?} padding={padding} size={size}"
             );
+        }
+    }
+}
+
+#[test]
+fn streaming_rejects_trailing_bytes_after_split_padding() {
+    for alphabet in [Alphabet::Standard, Alphabet::UrlSafe] {
+        for ignore_whitespace in [false, true] {
+            let codec = Codec {
+                alphabet,
+                padding: true,
+                ignore_whitespace,
+            };
+
+            // Split a two-pad quartet across chunks (`TQ=` + `=AAAA` and `TQ` + `==AAAA`),
+            // as well as a one-pad quartet (`TWE` + `=AAAA`).
+            for (first, second) in [
+                (&b"TQ="[..], &b"=AAAA"[..]),
+                (&b"TQ"[..], &b"==AAAA"[..]),
+                (&b"TWE"[..], &b"=AAAA"[..]),
+                (&b"TQ="[..], &b"=="[..]),
+            ] {
+                let mut decoder = yolow64::Decoder::new(codec);
+                let mut out = Vec::new();
+                decoder.feed(first, &mut out).unwrap();
+                assert_eq!(
+                    decoder.feed(second, &mut out),
+                    Err(Error::InvalidPadding),
+                    "accepted trailing bytes after padding for {codec:?}: {first:?} + {second:?}"
+                );
+            }
+
+            if ignore_whitespace {
+                let mut decoder = yolow64::Decoder::new(codec);
+                let mut out = Vec::new();
+                decoder.feed(b"TQ=", &mut out).unwrap();
+                decoder.feed(b"= \t\r\n", &mut out).unwrap();
+                decoder.finish(&mut out).unwrap();
+                assert_eq!(out, b"M");
+
+                let mut decoder = yolow64::Decoder::new(codec);
+                let mut out = Vec::new();
+                decoder.feed(b"TQ=", &mut out).unwrap();
+                assert_eq!(
+                    decoder.feed(b"= \t\r\nAAAA", &mut out),
+                    Err(Error::InvalidPadding)
+                );
+            } else {
+                let mut decoder = yolow64::Decoder::new(codec);
+                let mut out = Vec::new();
+                decoder.feed(b"TQ=", &mut out).unwrap();
+                assert_eq!(
+                    decoder.feed(b"= ", &mut out),
+                    Err(Error::InvalidPadding)
+                );
+            }
         }
     }
 }
