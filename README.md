@@ -33,11 +33,11 @@ See [`CHANGELOG.md`](CHANGELOG.md) for the 0.2.0 performance, compatibility and 
 
 ## Install
 
-Use the Git repository as a Cargo dependency (the crate has not been published to crates.io):
+Available on crates.io:
 
 ```toml
 [dependencies]
-yolow64 = { git = "https://github.com/YOLOW92/yolow64" }
+yolow64 = "0.2"
 ```
 
 ## Usage

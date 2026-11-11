@@ -33,11 +33,11 @@
 
 ## 安装
 
-通过 Git 仓库添加 Cargo 依赖（尚未发布到 crates.io）：
+已发布到 crates.io：
 
 ```toml
 [dependencies]
-yolow64 = { git = "https://github.com/YOLOW92/yolow64" }
+yolow64 = "0.2"
 ```
 
 ## 用法
